@@ -226,9 +226,19 @@ class App(tk.Tk):
                                          font=("맑은 고딕", 9), fg="#666", anchor="w")
         self.lbl_result_info.pack(fill="x", padx=14, pady=(6, 2))
 
+        # ── 상하 분할 패널 (트리 + 상세 크기 조절) ────────
+        self._paned = tk.PanedWindow(self, orient="vertical", sashwidth=6,
+                                      sashrelief="flat", bg="#c8d0d8",
+                                      opaqueresize=True)
+        self._paned.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+
+        # 트리 컨테이너 (상단 패널)
+        tree_outer = tk.Frame(self._paned, bg="#f0f2f5")
+        self._paned.add(tree_outer, stretch="always", minsize=120)
+
         # TreeView (메시지용)
-        self.tree_frame_msg = tk.Frame(self, bg="#f0f2f5")
-        self.tree_frame_msg.pack(fill="both", expand=True, padx=12, pady=(0, 4))
+        self.tree_frame_msg = tk.Frame(tree_outer, bg="#f0f2f5")
+        self.tree_frame_msg.pack(fill="both", expand=True)
 
         cols_msg = ("sender", "room", "content", "time", "date")
         self.tree_msg = ttk.Treeview(self.tree_frame_msg, columns=cols_msg, show="headings", selectmode="browse")
@@ -255,7 +265,7 @@ class App(tk.Tk):
         self.tree_msg.insert("", "end", values=("", "", "검색어를 입력하고 Enter 또는 검색 버튼을 클릭하세요", "", ""))
 
         # TreeView (쪽지용)
-        self.tree_frame_note = tk.Frame(self, bg="#f0f2f5")
+        self.tree_frame_note = tk.Frame(tree_outer, bg="#f0f2f5")
 
         cols_note = ("type", "sender", "receiver", "title", "date", "files")
         self.tree_note = ttk.Treeview(self.tree_frame_note, columns=cols_note, show="headings", selectmode="browse")
@@ -283,14 +293,27 @@ class App(tk.Tk):
         self.tree_note.bind("<<TreeviewSelect>>", self._on_select_note)
         self.tree_note.insert("", "end", values=("", "", "", "검색어를 입력하고 Enter 또는 검색 버튼을 클릭하세요", "", ""))
 
-        # 상세 내용 패널
-        detail_frame = tk.Frame(self, bg="white", height=100)
-        detail_frame.pack(fill="x", padx=12, pady=(0, 10))
-        detail_frame.pack_propagate(False)
-        tk.Label(detail_frame, text="선택 내용:", bg="white",
-                 font=("맑은 고딕", 9, "bold"), fg="#555").pack(anchor="w", padx=10, pady=(6, 2))
-        self.txt_detail = tk.Text(detail_frame, height=4, font=("맑은 고딕", 10),
+        # ── 상세 내용 패널 (하단 패널, 크기 조절 가능) ───
+        detail_frame = tk.Frame(self._paned, bg="white")
+        self._paned.add(detail_frame, stretch="never", minsize=80)
+
+        detail_hdr = tk.Frame(detail_frame, bg="white")
+        detail_hdr.pack(fill="x", padx=10, pady=(6, 2))
+        tk.Label(detail_hdr, text="선택 내용:", bg="white",
+                 font=("맑은 고딕", 9, "bold"), fg="#555").pack(side="left")
+        self._btn_copy = tk.Button(detail_hdr, text="복사", command=self._copy_detail,
+                                    bg="#e8edf2", fg="#333", font=("맑은 고딕", 8),
+                                    relief="flat", padx=10, pady=2, cursor="hand2")
+        self._btn_copy.pack(side="right")
+        self._lbl_copied = tk.Label(detail_hdr, text="", bg="white",
+                                     font=("맑은 고딕", 8), fg="#4a90d9")
+        self._lbl_copied.pack(side="right", padx=(0, 6))
+
+        self.txt_detail = tk.Text(detail_frame, font=("맑은 고딕", 10),
                                    relief="flat", bg="white", wrap="word", state="disabled")
+        txt_vsb = ttk.Scrollbar(detail_frame, orient="vertical", command=self.txt_detail.yview)
+        self.txt_detail.configure(yscrollcommand=txt_vsb.set)
+        txt_vsb.pack(side="right", fill="y", padx=(0, 4), pady=(0, 6))
         self.txt_detail.pack(fill="both", expand=True, padx=10, pady=(0, 6))
 
         # 스타일
@@ -312,14 +335,14 @@ class App(tk.Tk):
             self.row_msg_filter.pack(fill="x", padx=12, pady=(8, 4))
             self.row_note_filter.pack_forget()
             self.tree_frame_note.pack_forget()
-            self.tree_frame_msg.pack(fill="both", expand=True, padx=12, pady=(0, 4))
+            self.tree_frame_msg.pack(fill="both", expand=True)
         else:
             self.btn_note.config(bg="#4a90d9", fg="white")
             self.btn_msg.config(bg="#e8edf2", fg="#333")
             self.row_note_filter.pack(fill="x", padx=12, pady=(8, 4))
             self.row_msg_filter.pack_forget()
             self.tree_frame_msg.pack_forget()
-            self.tree_frame_note.pack(fill="both", expand=True, padx=12, pady=(0, 4))
+            self.tree_frame_note.pack(fill="both", expand=True)
 
     # ── 데이터 로드 ───────────────────────────────────
     def _load_rooms(self):
@@ -449,9 +472,22 @@ class App(tk.Tk):
         self.txt_detail.insert("1.0", text)
         self.txt_detail.config(state="disabled")
 
+    def _copy_detail(self):
+        text = self.txt_detail.get("1.0", "end-1c").strip()
+        if not text:
+            return
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self._lbl_copied.config(text="복사됨 ✓")
+        self.after(2000, lambda: self._lbl_copied.config(text=""))
+
 
 if __name__ == "__main__":
     app = App()
-    # 기본 메시지 모드로 시작
     app._switch_mode("msg")
+    # 상세 패널 초기 높이 150px 확보
+    app.update_idletasks()
+    total_h = app._paned.winfo_height()
+    if total_h > 200:
+        app._paned.sash_place(0, 0, total_h - 150)
     app.mainloop()
