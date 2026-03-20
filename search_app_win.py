@@ -2,7 +2,7 @@
 메시지/쪽지 RAG 검색 - Windows 앱
 실행: python search_app_win.py
 """
-import sys, sqlite3, os, threading, re
+import sys, sqlite3, os, threading, re, subprocess
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
@@ -169,6 +169,8 @@ class App(tk.Tk):
             pass
         self._search_mode = "msg"  # "msg" | "note"
         self._use_rag = tk.BooleanVar(value=LOCAL_RAG_AVAILABLE)
+        self._last_note_rows = []
+        self._last_note_query = ""
         self._build_ui()
         self._load_rooms()
         self._update_stats()
@@ -201,6 +203,26 @@ class App(tk.Tk):
                                    font=("맑은 고딕", 10), relief="flat",
                                    bg="#e8edf2", fg="#333", padx=20, pady=6, cursor="hand2")
         self.btn_note.pack(side="left")
+
+        # 수집 버튼 (탭 바 오른쪽)
+        collect_btns = [
+            ("📥 쪽지수집",   self._run_backup_notes),
+            ("📄 본문수집",   self._run_fetch_content),
+            ("📎 첨부수집",   self._run_batch_download),
+            ("🔄 인덱스",     self._run_build_index),
+        ]
+        self._collect_buttons = []
+        for label, cmd in reversed(collect_btns):
+            b = tk.Button(tab_frame, text=label, command=cmd,
+                          font=("맑은 고딕", 9), relief="flat",
+                          bg="#e8edf2", fg="#555", padx=10, pady=6, cursor="hand2")
+            b.pack(side="right", padx=1)
+            self._collect_buttons.append(b)
+
+        # 수집 진행 상태 표시줄
+        self._collect_status = tk.Label(self, text="", bg="#fff8e1",
+                                         font=("맑은 고딕", 9), fg="#7a5800",
+                                         anchor="w", relief="flat")
 
         # 검색 영역
         self.search_frame = tk.Frame(self, bg="white", pady=10)
@@ -265,11 +287,17 @@ class App(tk.Tk):
                                          font=("맑은 고딕", 9), fg="#666", anchor="w")
         self.lbl_result_info.pack(fill="x", padx=14, pady=(6, 2))
 
+        # ── 좌우 분할: 좌=검색결과, 우=Graph RAG 추론 ───
+        self._outer_paned = tk.PanedWindow(self, orient="horizontal", sashwidth=6,
+                                            sashrelief="flat", bg="#c8d0d8",
+                                            opaqueresize=True)
+        self._outer_paned.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+
         # ── 상하 분할 패널 (트리 + 상세 크기 조절) ────────
-        self._paned = tk.PanedWindow(self, orient="vertical", sashwidth=6,
+        self._paned = tk.PanedWindow(self._outer_paned, orient="vertical", sashwidth=6,
                                       sashrelief="flat", bg="#c8d0d8",
                                       opaqueresize=True)
-        self._paned.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        self._outer_paned.add(self._paned, stretch="always", minsize=420)
 
         # 트리 컨테이너 (상단 패널)
         tree_outer = tk.Frame(self._paned, bg="#f0f2f5")
@@ -355,6 +383,36 @@ class App(tk.Tk):
         txt_vsb.pack(side="right", fill="y", padx=(0, 4), pady=(0, 6))
         self.txt_detail.pack(fill="both", expand=True, padx=10, pady=(0, 6))
 
+        # ── 우측 패널: Graph RAG 인터랙티브 그래프 ───────
+        hop_outer = tk.Frame(self._outer_paned, bg="#16213e")
+        self._outer_paned.add(hop_outer, stretch="never", minsize=220)
+
+        hop_hdr = tk.Frame(hop_outer, bg="#16213e", height=32)
+        hop_hdr.pack(fill="x")
+        hop_hdr.pack_propagate(False)
+        tk.Label(hop_hdr, text="Graph RAG 추론 체인", bg="#16213e", fg="#a0c4ff",
+                 font=("맑은 고딕", 9, "bold")).pack(side="left", padx=12, pady=7)
+        self._lbl_graph_stat = tk.Label(hop_hdr, text="", bg="#16213e", fg="#557799",
+                                         font=("맑은 고딕", 8))
+        self._lbl_graph_stat.pack(side="right", padx=6)
+        self._btn_full_graph = tk.Button(
+            hop_hdr, text="전체 보기", command=self._show_full_graph,
+            bg="#2a3a5a", fg="#a0c4ff", font=("맑은 고딕", 8),
+            relief="flat", padx=8, pady=2, cursor="hand2"
+        )
+        self._btn_full_graph.pack(side="right", padx=(4, 0), pady=5)
+
+        # GraphWidget 임베드
+        try:
+            from graph_canvas import GraphWidget
+            self._graph_widget = GraphWidget(hop_outer)
+            self._graph_widget.pack(fill="both", expand=True)
+            self._graph_widget.clear()
+        except Exception as e:
+            self._graph_widget = None
+            tk.Label(hop_outer, text=f"그래프 위젯 로드 실패:\n{e}",
+                     bg="#1a1a2e", fg="#f00", font=("맑은 고딕", 9)).pack(pady=20)
+
         # 스타일
         style = ttk.Style()
         style.theme_use("clam")
@@ -364,6 +422,58 @@ class App(tk.Tk):
                          background="#e8edf2", foreground="#333")
         style.map("Treeview", background=[("selected", "#c3d9f5")],
                   foreground=[("selected", "#000")])
+
+    # ── 수집 버튼 공통 실행기 ─────────────────────────
+    def _run_script(self, script_name, label):
+        """스크립트를 서브프로세스로 실행, 진행 상황을 상태바에 표시"""
+        # 버튼 비활성화
+        for b in self._collect_buttons:
+            b.config(state="disabled")
+        self._collect_status.config(text=f"  ⏳ {label} 실행 중...")
+        self._collect_status.pack(fill="x", padx=0, pady=0)
+
+        def run():
+            script = Path(__file__).parent / script_name
+            proc = subprocess.Popen(
+                [sys.executable, "-u", str(script)],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                encoding="utf-8", errors="replace",
+                cwd=str(Path(__file__).parent)
+            )
+            last_line = ""
+            for line in proc.stdout:
+                line = line.rstrip()
+                if line:
+                    last_line = line
+                    self.after(0, lambda l=line: self._collect_status.config(
+                        text=f"  ⏳ {label}: {l[:80]}"))
+            proc.wait()
+            ok = proc.returncode == 0
+            msg = f"  {'✓' if ok else '✗'} {label} 완료" + (f": {last_line[:60]}" if last_line else "")
+            self.after(0, lambda: self._collect_status.config(text=msg))
+            self.after(0, self._update_stats)
+            self.after(0, self._enable_collect_buttons)
+            if ok and script_name == "build_index.py":
+                # 인덱스 재빌드 후 RAG 체크박스 활성화
+                self.after(0, lambda: self._chk_rag.config(state="normal"))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _enable_collect_buttons(self):
+        for b in self._collect_buttons:
+            b.config(state="normal")
+
+    def _run_backup_notes(self):
+        self._run_script("backup_notes.py", "쪽지수집")
+
+    def _run_fetch_content(self):
+        self._run_script("fetch_full_content.py", "본문수집")
+
+    def _run_batch_download(self):
+        self._run_script("batch_download.py", "첨부파일")
+
+    def _run_build_index(self):
+        self._run_script("build_index.py", "인덱스재빌드")
 
     # ── 모드 전환 ─────────────────────────────────────
     def _switch_mode(self, mode):
@@ -469,6 +579,8 @@ class App(tk.Tk):
         self._update_stats()
 
     def _show_note_results(self, rows, mode, q):
+        self._last_note_rows = rows   # 전체 보기용 저장
+        self._last_note_query = q
         for item in self.tree_note.get_children():
             self.tree_note.delete(item)
         if not rows:
@@ -521,6 +633,61 @@ class App(tk.Tk):
                     pass
             detail = f"[{date_}] {type_label}쪽지  {sender} → {receiver}  {files}\n{content}"
             self._set_detail(detail)
+            if note_code and self._graph_widget:
+                query = self.entry_q.get().strip()
+                threading.Thread(
+                    target=self._update_graph,
+                    args=(note_code, query),
+                    daemon=True
+                ).start()
+
+    def _show_full_graph(self):
+        """검색 결과 전체를 하나의 그래프로 표시"""
+        rows  = self._last_note_rows
+        query = self._last_note_query
+        if not rows or not self._graph_widget:
+            return
+        self._btn_full_graph.config(state="disabled")
+
+        def run():
+            try:
+                from graph_rag import get_full_graph_data
+                try:
+                    from local_rag import _last_note_scores
+                    scores = dict(_last_note_scores)
+                except Exception:
+                    scores = {}
+                data = get_full_graph_data(rows, query, scores)
+                n_nodes = len(data.get("nodes", []))
+                n_edges = len(data.get("edges", []))
+                self.after(0, lambda: self._graph_widget.set_graph(data))
+                self.after(0, lambda: self._lbl_graph_stat.config(
+                    text=f"노드 {n_nodes}  엣지 {n_edges}"
+                ))
+            except Exception as e:
+                self.after(0, lambda: self._lbl_graph_stat.config(text=f"오류: {e}"))
+            self.after(0, lambda: self._btn_full_graph.config(state="normal"))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _update_graph(self, note_code, query):
+        """백그라운드에서 그래프 데이터 생성 후 위젯 업데이트"""
+        try:
+            from graph_rag import get_hop_graph_data
+            try:
+                from local_rag import _last_note_scores
+                score = _last_note_scores.get(note_code)
+            except Exception:
+                score = None
+            data = get_hop_graph_data(note_code, query or "(쿼리 없음)", sim_score=score)
+            n_nodes = len(data.get("nodes", []))
+            n_edges = len(data.get("edges", []))
+            self.after(0, lambda: self._graph_widget.set_graph(data))
+            self.after(0, lambda: self._lbl_graph_stat.config(
+                text=f"노드 {n_nodes}  엣지 {n_edges}"
+            ))
+        except Exception as e:
+            self.after(0, lambda: self._lbl_graph_stat.config(text=f"오류: {e}"))
 
     def _set_detail(self, text):
         self.txt_detail.config(state="normal")
@@ -543,7 +710,12 @@ if __name__ == "__main__":
     app._switch_mode("msg")
     # 상세 패널 초기 높이 150px 확보
     app.update_idletasks()
+    # 상하 분할: 하단 상세 패널 150px
     total_h = app._paned.winfo_height()
     if total_h > 200:
         app._paned.sash_place(0, 0, total_h - 150)
+    # 좌우 분할: 우측 Graph RAG 패널 320px
+    total_w = app._outer_paned.winfo_width()
+    if total_w > 500:
+        app._outer_paned.sash_place(0, total_w - 320, 0)
     app.mainloop()

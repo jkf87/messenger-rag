@@ -1,5 +1,13 @@
 __pycache__/
 *.pyc
+*.pyo
+
+# 개인 데이터 (절대 커밋 금지)
 messages.db
-attachments/
 embed_index.pkl
+attachments/
+graph_html/
+
+# 기타
+lib/
+.env

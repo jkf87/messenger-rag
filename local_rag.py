@@ -25,6 +25,7 @@ MODEL_NAME = "intfloat/multilingual-e5-small"
 
 _index = None
 _model = None
+_last_note_scores: dict = {}   # note_code → float 유사도 (graph_rag에서 참조)
 
 def _load():
     global _index, _model
@@ -49,6 +50,11 @@ def rag_search_notes(q: str, note_type="all", sender="", top_k=30):
     qv = _query_vec(q)
     scores = idx["note_embs"] @ qv          # 코사인 유사도 (정규화됐으므로 내적=코사인)
     order  = np.argsort(scores)[::-1]
+
+    # 유사도 점수 저장 (graph_rag에서 참조)
+    _last_note_scores.clear()
+    for i in order:
+        _last_note_scores[idx["notes"][i][0]] = float(scores[i])
 
     results = []
     for i in order:
