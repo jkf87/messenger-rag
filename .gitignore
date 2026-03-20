@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 messages.db
 attachments/
+embed_index.pkl

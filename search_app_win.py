@@ -13,6 +13,14 @@ if sys.platform == "win32":
 DB_PATH = Path(__file__).parent / "messages.db"
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
+# 로컬 RAG 가용 여부
+try:
+    from local_rag import is_index_ready, rag_search_notes, rag_search_messages
+    LOCAL_RAG_AVAILABLE = is_index_ready()
+except ImportError:
+    LOCAL_RAG_AVAILABLE = False
+    def is_index_ready(): return False
+
 # ── 날짜 포맷 ─────────────────────────────────────────
 def fmt_note_date(d):
     """20260319151418891 → 2026-03-19 15:14"""
@@ -141,6 +149,7 @@ class App(tk.Tk):
         except:
             pass
         self._search_mode = "msg"  # "msg" | "note"
+        self._use_rag = tk.BooleanVar(value=LOCAL_RAG_AVAILABLE)
         self._build_ui()
         self._load_rooms()
         self._update_stats()
@@ -189,6 +198,17 @@ class App(tk.Tk):
                         bg="#4a90d9", fg="white", font=("맑은 고딕", 10, "bold"),
                         relief="flat", padx=16, pady=6, cursor="hand2")
         btn.pack(side="left", padx=(8, 0))
+
+        # 로컬 RAG 토글
+        rag_state = "normal" if LOCAL_RAG_AVAILABLE else "disabled"
+        rag_text  = "로컬 RAG" if LOCAL_RAG_AVAILABLE else "로컬 RAG (인덱스 없음)"
+        self._chk_rag = tk.Checkbutton(
+            row1, text=rag_text, variable=self._use_rag,
+            font=("맑은 고딕", 9), bg="white", fg="#4a90d9",
+            activebackground="white", cursor="hand2", state=rag_state,
+            command=self._update_stats
+        )
+        self._chk_rag.pack(side="left", padx=(12, 0))
 
         # 필터 행 (메시지용)
         self.row_msg_filter = tk.Frame(self.search_frame, bg="white")
@@ -358,7 +378,12 @@ class App(tk.Tk):
 
     def _update_stats(self):
         msg_total, note_total, rooms, _ = get_stats()
-        mode = "AI 의미검색" if ANTHROPIC_API_KEY else "키워드 검색"
+        if self._use_rag.get() and LOCAL_RAG_AVAILABLE:
+            mode = "로컬 RAG"
+        elif ANTHROPIC_API_KEY:
+            mode = "AI 의미검색"
+        else:
+            mode = "키워드 검색"
         self.lbl_stats.config(text=f"메시지 {msg_total:,}건  |  쪽지 {note_total:,}건  |  채팅방 {rooms}개  |  {mode}")
         self.lbl_mode.config(text=f"검색모드: {mode}")
         self.lbl_mode_note.config(text=f"검색모드: {mode}")
@@ -376,7 +401,9 @@ class App(tk.Tk):
             sender = self.entry_sender_msg.get().strip()
             room   = self._room_map.get(self.cmb_room.get(), "")
             def run():
-                if ANTHROPIC_API_KEY:
+                if self._use_rag.get() and LOCAL_RAG_AVAILABLE:
+                    rows, mode = rag_search_messages(q, room, sender)
+                elif ANTHROPIC_API_KEY:
                     rows, mode = semantic_search_messages(q, room, sender)
                 else:
                     rows = search_messages(q, room, sender)
@@ -389,7 +416,9 @@ class App(tk.Tk):
             nt_map = {"전체": "all", "받은쪽지": "receive", "보낸쪽지": "send"}
             nt     = nt_map.get(self.cmb_note_type.get(), "all")
             def run():
-                if ANTHROPIC_API_KEY:
+                if self._use_rag.get() and LOCAL_RAG_AVAILABLE:
+                    rows, mode = rag_search_notes(q, nt, sender)
+                elif ANTHROPIC_API_KEY:
                     rows, mode = semantic_search_notes(q, nt, sender)
                 else:
                     rows = search_notes(q, nt, sender)
