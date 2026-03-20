@@ -15,11 +15,30 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # 로컬 RAG 가용 여부
 try:
-    from local_rag import is_index_ready, rag_search_notes, rag_search_messages
+    from local_rag import is_index_ready, rag_search_notes, rag_search_messages, _load
     LOCAL_RAG_AVAILABLE = is_index_ready()
 except ImportError:
     LOCAL_RAG_AVAILABLE = False
     def is_index_ready(): return False
+
+# 앱 시작 시 백그라운드에서 RAG 모델 미리 로드
+_rag_ready = False
+_rag_loading = False
+
+def _preload_rag():
+    global _rag_ready, _rag_loading
+    if not LOCAL_RAG_AVAILABLE:
+        return
+    _rag_loading = True
+    try:
+        _load()
+        _rag_ready = True
+    except Exception:
+        pass
+    _rag_loading = False
+
+if LOCAL_RAG_AVAILABLE:
+    threading.Thread(target=_preload_rag, daemon=True).start()
 
 # ── 날짜 포맷 ─────────────────────────────────────────
 def fmt_note_date(d):
@@ -402,7 +421,11 @@ class App(tk.Tk):
             room   = self._room_map.get(self.cmb_room.get(), "")
             def run():
                 if self._use_rag.get() and LOCAL_RAG_AVAILABLE:
-                    rows, mode = rag_search_messages(q, room, sender)
+                    if _rag_loading:
+                        self.after(0, lambda: self.lbl_result_info.config(text="RAG 모델 로딩 중... 잠시만 기다려주세요"))
+                        while _rag_loading:
+                            import time; time.sleep(0.3)
+                    rows, mode = rag_search_messages(q, room, sender, top_k=100)
                 elif ANTHROPIC_API_KEY:
                     rows, mode = semantic_search_messages(q, room, sender)
                 else:
@@ -417,7 +440,11 @@ class App(tk.Tk):
             nt     = nt_map.get(self.cmb_note_type.get(), "all")
             def run():
                 if self._use_rag.get() and LOCAL_RAG_AVAILABLE:
-                    rows, mode = rag_search_notes(q, nt, sender)
+                    if _rag_loading:
+                        self.after(0, lambda: self.lbl_result_info.config(text="RAG 모델 로딩 중... 잠시만 기다려주세요"))
+                        while _rag_loading:
+                            import time; time.sleep(0.3)
+                    rows, mode = rag_search_notes(q, nt, sender, top_k=100)
                 elif ANTHROPIC_API_KEY:
                     rows, mode = semantic_search_notes(q, nt, sender)
                 else:

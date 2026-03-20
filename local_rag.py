@@ -61,6 +61,9 @@ def rag_search_notes(q: str, note_type="all", sender="", top_k=30):
         if len(results) >= top_k:
             break
 
+    # read_yn 컬럼 삽입 (인덱스엔 없으므로 'Y' 플레이스홀더)
+    # 순서: note_code, note_type, sender, receiver, title, content, note_date, [read_yn], file_cnt
+    results = [r[:7] + ('Y',) + r[7:] for r in results]
     return results, "로컬RAG"
 
 def rag_search_messages(q: str, room="", sender="", top_k=30):
