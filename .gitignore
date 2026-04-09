@@ -11,3 +11,10 @@ graph_html/
 # 기타
 lib/
 .env
+config.json
+
+# 테스트 DB
+test2.db/
+test3.db/
+test_grafeo.db/
+messenger_grafeo.db/

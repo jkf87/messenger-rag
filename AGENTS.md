@@ -209,6 +209,42 @@ result = json.loads(ws.recv())["result"]["result"]["value"]
 
 ---
 
+## LLM Wiki 시맨틱 레이어 (Karpathy 패턴)
+
+참조: https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f
+
+```
+Layer 0: messages.db           ← 원본 SQLite (불변)
+Layer 1: wiki/                 ← LLM 컴파일 마크다운 위키
+  ├── SCHEMA.md                ← 위키 구조·규칙 정의
+  ├── index.md                 ← 전체 페이지 카탈로그 (자동 갱신)
+  ├── log.md                   ← append-only 작업 로그
+  ├── people/{이름}.md         ← 인물별 커뮤니케이션 프로필
+  ├── topics/{주제}.md         ← 주제별 지식 합성
+  └── timeline/{YYYY-MM}.md   ← 월별 활동 요약
+```
+
+### `wiki_build.py` CLI
+
+```bash
+python wiki_build.py status              # 통계 출력
+python wiki_build.py ingest              # 증분 인제스트
+python wiki_build.py ingest --full       # 전체 재빌드
+python wiki_build.py query "질문"        # wiki 검색 + LLM 합성 (API 키 필요)
+python wiki_build.py lint                # 상태 검사
+```
+
+- ANTHROPIC_API_KEY 미설정 시 구조화 기본 페이지 생성 (LLM 합성 없음)
+- 설정 시 Claude API로 페이지 합성 (ingest) + 답변 생성 (query)
+
+### `search_app_win.py` Wiki 탭
+
+- 탭바에 "📖 Wiki 답변" 탭 추가
+- 탭바 오른쪽 "📖 Wiki빌드" 버튼 추가
+- 검색창에서 질문 입력 후 Enter → wiki 검색 + LLM 합성 결과 표시
+
+---
+
 ## 확장 포인트
 
 - **RRF 하이브리드**: 키워드 + 시맨틱 점수를 `1/(rank+60)` 공식으로 합산
